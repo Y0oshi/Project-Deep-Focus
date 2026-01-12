@@ -1,0 +1,377 @@
+[
+    {
+        "provider": "Vultr (Cloud)",
+        "description": "Developer VPS instances. High VNC/SSH density. Many default configs.",
+        "priority": "FTP/VNC/SSH",
+        "ranges": [
+            "45.32.0.0/16",
+            "45.63.0.0/16",
+            "45.76.0.0/16",
+            "45.77.0.0/16",
+            "66.42.0.0/16",
+            "104.156.0.0/16",
+            "108.61.0.0/16",
+            "149.28.0.0/16",
+            "155.138.0.0/16",
+            "207.246.0.0/16"
+        ]
+    },
+    {
+        "provider": "Contabo (Budget)",
+        "description": "Cheap VPS. Many mistakes, forgotten servers, open FTP.",
+        "priority": "FTP/VNC/SSH",
+        "ranges": [
+            "62.171.0.0/16",
+            "144.91.0.0/16",
+            "161.97.0.0/16",
+            "167.86.0.0/16",
+            "173.212.0.0/16",
+            "173.249.0.0/16",
+            "178.238.0.0/16",
+            "193.26.0.0/16",
+            "194.163.0.0/16",
+            "207.180.0.0/16"
+        ]
+    },
+    {
+        "provider": "Scaleway (France)",
+        "description": "European cloud. Developer boxes, test environments.",
+        "priority": "FTP/VNC/SSH",
+        "ranges": [
+            "51.15.0.0/16",
+            "51.158.0.0/16",
+            "163.172.0.0/16",
+            "212.47.0.0/16",
+            "195.154.0.0/16"
+        ]
+    },
+    {
+        "provider": "LeaseWeb",
+        "description": "Enterprise hosting. Some legacy servers with FTP/SSH.",
+        "priority": "FTP/VNC/SSH",
+        "ranges": [
+            "5.79.0.0/16",
+            "37.48.0.0/16",
+            "46.165.0.0/16",
+            "85.17.0.0/16",
+            "178.162.0.0/16",
+            "209.58.0.0/16"
+        ]
+    },
+    {
+        "provider": "Ionos/1&1 (Germany)",
+        "description": "Legacy German hosting. Many old FTP servers.",
+        "priority": "FTP/VNC/SSH",
+        "ranges": [
+            "82.165.0.0/16",
+            "217.160.0.0/16",
+            "87.106.0.0/16",
+            "74.208.0.0/16",
+            "212.227.0.0/16"
+        ]
+    },
+    {
+        "provider": "HostGator/Bluehost",
+        "description": "Shared hosting. FTP often exposed.",
+        "priority": "FTP/SSH",
+        "ranges": [
+            "108.167.0.0/16",
+            "192.185.0.0/16",
+            "198.57.0.0/16",
+            "162.144.0.0/16",
+            "166.62.0.0/16"
+        ]
+    },
+    {
+        "provider": "University Networks (US)",
+        "description": "Research servers. Often open for collaboration.",
+        "priority": "FTP/SSH",
+        "ranges": [
+            "128.32.0.0/16",
+            "128.59.0.0/16",
+            "128.112.0.0/16",
+            "129.105.0.0/16",
+            "130.132.0.0/16",
+            "171.64.0.0/16"
+        ]
+    },
+    {
+        "provider": "Hetzner (Germany)",
+        "description": "German hosting giant. Self-hosted projects, dashboards, forgotten servers.",
+        "ranges": [
+            "116.203.0.0/16",
+            "116.202.0.0/16",
+            "78.46.0.0/16",
+            "88.198.0.0/16",
+            "49.12.0.0/16",
+            "195.201.0.0/16",
+            "138.201.0.0/16",
+            "159.69.0.0/16"
+        ]
+    },
+    {
+        "provider": "OVH (France/Global)",
+        "description": "Massive infrastructure. Game servers, backups, random IT projects.",
+        "ranges": [
+            "51.254.0.0/16",
+            "51.255.0.0/16",
+            "91.121.0.0/16",
+            "178.32.0.0/16",
+            "37.187.0.0/16",
+            "94.23.0.0/16",
+            "87.98.0.0/16",
+            "213.186.0.0/16"
+        ]
+    },
+    {
+        "provider": "DigitalOcean (Older)",
+        "description": "Abandoned droplets running ancient software.",
+        "ranges": [
+            "162.243.0.0/16",
+            "104.131.0.0/16",
+            "192.241.0.0/16",
+            "45.55.0.0/16",
+            "167.99.0.0/16",
+            "206.189.0.0/16"
+        ]
+    },
+    {
+        "provider": "Linode",
+        "description": "High density of developer instances.",
+        "ranges": [
+            "173.255.0.0/16",
+            "45.33.0.0/16",
+            "45.79.0.0/16",
+            "139.162.0.0/16"
+        ]
+    },
+    {
+        "provider": "Korea Telecom",
+        "description": "Extremely high density of unpassworded NAS drives and IoT.",
+        "ranges": [
+            "1.208.0.0/16",
+            "1.209.0.0/16",
+            "1.210.0.0/16",
+            "211.200.0.0/16",
+            "211.201.0.0/16",
+            "112.144.0.0/16",
+            "112.145.0.0/16",
+            "175.192.0.0/16",
+            "175.193.0.0/16",
+            "175.194.0.0/16",
+            "125.128.0.0/16",
+            "125.129.0.0/16"
+        ]
+    },
+    {
+        "provider": "Taiwan (HiNet)",
+        "description": "Dynamic IPs. Often host directly accessible cameras.",
+        "ranges": [
+            "114.32.0.0/16",
+            "114.33.0.0/16",
+            "114.34.0.0/16",
+            "118.160.0.0/16",
+            "118.161.0.0/16",
+            "220.128.0.0/16",
+            "220.129.0.0/16",
+            "220.130.0.0/16",
+            "61.216.0.0/16",
+            "61.217.0.0/16"
+        ]
+    },
+    {
+        "provider": "China Telecom",
+        "description": "Massive IoT, industrial equipment, webcams, DVRs.",
+        "ranges": [
+            "113.64.0.0/16",
+            "113.65.0.0/16",
+            "113.66.0.0/16",
+            "113.67.0.0/16",
+            "117.60.0.0/16",
+            "117.61.0.0/16",
+            "183.0.0.0/16",
+            "183.1.0.0/16",
+            "183.2.0.0/16",
+            "183.3.0.0/16",
+            "222.64.0.0/16",
+            "222.65.0.0/16",
+            "58.32.0.0/16",
+            "58.33.0.0/16"
+        ]
+    },
+    {
+        "provider": "Russia (Rostelecom)",
+        "description": "Abandoned infrastructure, old cameras, industrial SCADA.",
+        "ranges": [
+            "95.24.0.0/16",
+            "95.25.0.0/16",
+            "176.192.0.0/16",
+            "176.193.0.0/16",
+            "178.46.0.0/16",
+            "178.47.0.0/16",
+            "188.162.0.0/16",
+            "188.163.0.0/16",
+            "212.164.0.0/16",
+            "212.165.0.0/16"
+        ]
+    },
+    {
+        "provider": "Thailand (TRUE/TOT)",
+        "description": "Very high camera density, weak security culture.",
+        "ranges": [
+            "171.96.0.0/16",
+            "171.97.0.0/16",
+            "171.98.0.0/16",
+            "171.99.0.0/16",
+            "110.164.0.0/16",
+            "110.168.0.0/16",
+            "49.48.0.0/16",
+            "49.49.0.0/16"
+        ]
+    },
+    {
+        "provider": "Vietnam (VNPT/Viettel)",
+        "description": "Fast growing, lots of misconfigured IoT.",
+        "ranges": [
+            "113.160.0.0/16",
+            "113.161.0.0/16",
+            "113.162.0.0/16",
+            "42.112.0.0/16",
+            "42.113.0.0/16",
+            "42.114.0.0/16",
+            "42.115.0.0/16",
+            "14.160.0.0/16",
+            "14.161.0.0/16"
+        ]
+    },
+    {
+        "provider": "India (BSNL/Airtel)",
+        "description": "Huge residential IoT, NVRs, Hikvision cams.",
+        "ranges": [
+            "117.192.0.0/16",
+            "117.193.0.0/16",
+            "117.194.0.0/16",
+            "117.195.0.0/16",
+            "49.32.0.0/16",
+            "49.33.0.0/16",
+            "106.192.0.0/16",
+            "106.193.0.0/16",
+            "223.176.0.0/16",
+            "223.177.0.0/16"
+        ]
+    },
+    {
+        "provider": "Brazil (Vivo/Claro)",
+        "description": "Messy network configs. Lots of Mikrotik routers.",
+        "ranges": [
+            "177.0.0.0/16",
+            "177.1.0.0/16",
+            "177.2.0.0/16",
+            "179.0.0.0/16",
+            "179.1.0.0/16",
+            "189.0.0.0/16",
+            "189.1.0.0/16",
+            "200.128.0.0/16",
+            "200.129.0.0/16"
+        ]
+    },
+    {
+        "provider": "Indonesia (Telkom)",
+        "description": "Large residential IoT base, cameras, NVRs.",
+        "ranges": [
+            "114.120.0.0/16",
+            "114.121.0.0/16",
+            "114.122.0.0/16",
+            "180.240.0.0/16",
+            "180.241.0.0/16",
+            "180.242.0.0/16",
+            "36.64.0.0/16",
+            "36.65.0.0/16"
+        ]
+    },
+    {
+        "provider": "Philippines (PLDT/Globe)",
+        "description": "Growing IoT, many Dahua/Hikvision cams.",
+        "ranges": [
+            "112.198.0.0/16",
+            "112.199.0.0/16",
+            "124.104.0.0/16",
+            "124.105.0.0/16",
+            "49.144.0.0/16",
+            "49.145.0.0/16"
+        ]
+    },
+    {
+        "provider": "Mexico (Telmex)",
+        "description": "Residential IoT, routers, cameras.",
+        "ranges": [
+            "187.128.0.0/16",
+            "187.129.0.0/16",
+            "187.130.0.0/16",
+            "189.128.0.0/16",
+            "189.129.0.0/16",
+            "201.144.0.0/16",
+            "201.145.0.0/16"
+        ]
+    },
+    {
+        "provider": "Turkey (Turk Telekom)",
+        "description": "Residential DSL, cameras, NAS drives.",
+        "ranges": [
+            "88.224.0.0/16",
+            "88.225.0.0/16",
+            "88.226.0.0/16",
+            "78.160.0.0/16",
+            "78.161.0.0/16",
+            "85.96.0.0/16",
+            "85.97.0.0/16"
+        ]
+    },
+    {
+        "provider": "Poland (Orange/T-Mobile)",
+        "description": "European residential, smart home devices.",
+        "ranges": [
+            "83.0.0.0/16",
+            "83.1.0.0/16",
+            "83.2.0.0/16",
+            "89.64.0.0/16",
+            "89.65.0.0/16"
+        ]
+    },
+    {
+        "provider": "Iran (TCI)",
+        "description": "Isolated network, older equipment, DVRs.",
+        "ranges": [
+            "2.176.0.0/16",
+            "2.177.0.0/16",
+            "2.178.0.0/16",
+            "5.160.0.0/16",
+            "5.161.0.0/16",
+            "37.128.0.0/16",
+            "37.129.0.0/16"
+        ]
+    },
+    {
+        "provider": "Egypt (TE Data)",
+        "description": "Residential DSL, cameras, routers.",
+        "ranges": [
+            "41.32.0.0/16",
+            "41.33.0.0/16",
+            "41.34.0.0/16",
+            "41.35.0.0/16",
+            "197.32.0.0/16",
+            "197.33.0.0/16"
+        ]
+    },
+    {
+        "provider": "Pakistan (PTCL)",
+        "description": "Growing broadband, DVRs, cameras.",
+        "ranges": [
+            "39.32.0.0/16",
+            "39.33.0.0/16",
+            "39.34.0.0/16",
+            "182.176.0.0/16",
+            "182.177.0.0/16"
+        ]
+    }
+]

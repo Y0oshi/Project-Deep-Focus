@@ -1,0 +1,8 @@
+{
+    "max_load": 8.3,
+    "cool_down_target": 5.0,
+    "export_path": "exports",
+    "target_network": "116.203.0.0/16",
+    "scan_speed": 300,
+    "power_level": 80
+}

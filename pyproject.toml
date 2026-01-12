@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deep-focus"
+version = "4.1.0"
+description = "High-performance autonomous internet observatory and service indexer."
+authors = [
+  { name = "Y0oshi", email = "y0oshi@example.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "aiosqlite>=0.17.0",
+    "rich>=13.0.0",
+    "click>=8.0.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/y0oshi/deep-focus"
+
+[project.scripts]
+deepfocus = "deep_focus:main"
