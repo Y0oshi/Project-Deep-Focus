@@ -160,11 +160,16 @@ def perform_export():
     import sqlite3
     
     cfg = config.load_config()
-    choice = input(f"Export results to '{cfg['export_path']}'? (Y/n): ").lower()
+    
+    # Sanitize path: Remove shell escapes common in Mac terminal drag-and-drop
+    raw_path = str(cfg['export_path'])
+    clean_path = raw_path.replace(r'\ ', ' ')
+    
+    choice = input(f"Export results to '{clean_path}'? (Y/n): ").lower()
     if choice in ['n', 'no']:
         return
         
-    export_dir = Path(cfg['export_path'])
+    export_dir = Path(clean_path)
     export_dir.mkdir(exist_ok=True)
     
     timestamp = int(time.time())
