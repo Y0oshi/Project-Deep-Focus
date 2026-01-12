@@ -23,7 +23,7 @@ IF %ERRORLEVEL% NEQ 0 (
 IF EXIST "venv" (
     ECHO [*] Virtual environment already exists.
 ) ELSE (
-    ECHO [*] Creating virtual environment (venv)...
+    ECHO [*] Creating virtual environment ^(venv^)...
     python -m venv venv
 )
 
