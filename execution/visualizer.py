@@ -174,6 +174,12 @@ def run_dashboard():
                 break
             except Exception as e:
                 time.sleep(1) # Backoff on error
+    finally:
+        try:
+            db.close()
+            print("DB Connection Closed.")
+        except:
+            pass
 
 if __name__ == "__main__":
     try:

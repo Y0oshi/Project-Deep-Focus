@@ -129,8 +129,13 @@ def stop_scan():
     # 2. Offer Export
     perform_export()
     
+    import gc
+    
     # 3. Cleanup Session Data
     console.print("\n[dim][*] Cleaning up session data...[/dim]")
+    
+    # Force GC to release any lingering SQLite handles
+    gc.collect()
     
     for attempt in range(5):
         try:
