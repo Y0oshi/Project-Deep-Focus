@@ -131,14 +131,23 @@ def stop_scan():
     
     # 3. Cleanup Session Data
     console.print("\n[dim][*] Cleaning up session data...[/dim]")
-    try:
-        # Remove temporary SQLite database files
-        for f in ["results.db", "results.db-wal", "results.db-shm"]:
-            if os.path.exists(f): 
-                os.remove(f)
-        console.print("[green][+] Session cleared. Ready for next scan.[/green]")
-    except Exception as e:
-        console.print(f"[red][!] Cleanup warning: {e}[/red]")
+    
+    for attempt in range(5):
+        try:
+            # Remove temporary SQLite database files
+            for f in ["results.db", "results.db-wal", "results.db-shm"]:
+                if os.path.exists(f): 
+                    os.remove(f)
+            console.print("[green][+] Session cleared. Ready for next scan.[/green]")
+            break
+        except (PermissionError, OSError):
+            # Windows file locking... wait and retry
+            time.sleep(1.0)
+            if attempt == 4:
+                console.print(f"[red][!] Cleanup warning: Could not delete results.db (File locked). Manual delete required.[/red]")
+        except Exception as e:
+             console.print(f"[red][!] Cleanup warning: {e}[/red]")
+             break
 
 def perform_export():
     """Export valid findings to a text file."""
@@ -158,6 +167,7 @@ def perform_export():
     
     console.print(f"[cyan][*] Exporting data to {filename}...[/cyan]")
     
+    conn = None
     try:
         conn = sqlite3.connect("results.db")
         cursor = conn.cursor()
@@ -192,10 +202,12 @@ def perform_export():
                 count += 1
                 
         console.print(f"[bold green][+] Export Complete. Saved {count} records.[/bold green]")
-        conn.close()
         
     except Exception as e:
         console.print(f"[bold red][!] Export Failed: {e}[/bold red]")
+    finally:
+        if conn:
+            conn.close()
 
 def configure_settings():
     """Interactive settings menu."""
