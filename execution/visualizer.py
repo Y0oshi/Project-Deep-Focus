@@ -157,23 +157,24 @@ def run_dashboard():
         return
 
     # Rich Live Display
-    with Live(refresh_per_second=4, screen=True) as live:
-        while True:
-            try:
-                # 1. Fetch Data
-                stats, churn, services = fetch_analytics(db)
-                
-                # 2. Render Layout
-                layout = generate_layout(stats, churn, services)
-                live.update(layout)
-                
-                # 3. Frequency Cap
-                time.sleep(0.5)
-                
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                time.sleep(1) # Backoff on error
+    try:
+        with Live(refresh_per_second=4, screen=True) as live:
+            while True:
+                try:
+                    # 1. Fetch Data
+                    stats, churn, services = fetch_analytics(db)
+                    
+                    # 2. Render Layout
+                    layout = generate_layout(stats, churn, services)
+                    live.update(layout)
+                    
+                    # 3. Frequency Cap
+                    time.sleep(0.5)
+                    
+                except KeyboardInterrupt:
+                    break
+                except Exception as e:
+                    time.sleep(1) # Backoff on error
     finally:
         try:
             db.close()
