@@ -36,7 +36,7 @@ pip install rich aiosqlite --upgrade
 ECHO [*] Creating launcher...
 (
 ECHO @echo off
-ECHO cd /d "%%~dp0"
+ECHO cd /d "%CD%"
 ECHO call venv\Scripts\activate.bat
 ECHO python deep_focus.py %%*
 ) > deepfocus.bat

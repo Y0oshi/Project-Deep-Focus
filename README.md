@@ -80,8 +80,8 @@ Deep Focus comes with automated installers for all major platforms.
 
 1. **Download and Enter Directory**:
    ```bash
-   git clone https://github.com/yourusername/deep-focus.git
-   cd deep-focus
+   git clone https://github.com/Y0oshi/Project-Deep-Focus.git
+   cd Project-Deep-Focus
    ```
 
 2. **Run Installer**:

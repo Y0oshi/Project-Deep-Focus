@@ -37,12 +37,14 @@ pip install rich aiosqlite --upgrade
 # 4. Create Launcher
 echo "[*] Creating launcher..."
 LAUNCHER="deepfocus"
-cat > "$LAUNCHER" << 'EOF'
+INSTALL_DIR="$(pwd)"
+
+# Use unquoted EOF to allow variable expansion for INSTALL_DIR
+cat > "$LAUNCHER" << EOF
 #!/bin/bash
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$DIR"
+cd "$INSTALL_DIR"
 source "venv/bin/activate"
-python3 "deep_focus.py" "$@"
+python3 "deep_focus.py" "\$@"
 EOF
 
 chmod +x "$LAUNCHER"

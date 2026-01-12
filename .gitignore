@@ -1,0 +1,10 @@
+# System
+.DS_Store
+.tmp/
+__pycache__/
+*.pyc
+
+# Environment & Credentials
+.env
+credentials.json
+token.json
