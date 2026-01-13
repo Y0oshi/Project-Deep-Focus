@@ -115,7 +115,7 @@ If you prefer to configure everything yourself:
 ### Starting the Tool
 
 ```bash
-python deep_focus.py
+deepfocus
 ```
 
 ### Available Commands
