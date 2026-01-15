@@ -494,6 +494,82 @@ class MQTTProbe(BaseProbe):
                 latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
             )
 
+class RDPProbe(BaseProbe):
+    """RDP Probe for Windows Remote Desktop detection."""
+    async def run(self, ip_address: str) -> Observation:
+        start_time = time.time()
+        try:
+            conn = await asyncio.wait_for(
+                asyncio.open_connection(ip_address, self.port),
+                timeout=self.timeout
+            )
+            reader, writer = conn
+            latency = (time.time() - start_time) * 1000
+            
+            # X.224 Connection Request (CR) - Standard RDP negotiation
+            # This is a minimal TPKT + X.224 CR packet requesting RDP
+            # TPKT Header: 03 00 00 13 (version 3, reserved, length 19)
+            # X.224 CR: 0e e0 00 00 00 00 00 01 00 08 00 03 00 00 00
+            #   - Length: 14 (0x0e)
+            #   - CR code: 0xe0
+            #   - Dst/Src ref: 00 00 / 00 00
+            #   - Class: 00
+            #   - Cookie/Negotiation Request follows
+            x224_conn_request = bytes.fromhex(
+                "030000130ee000000000000100080003000000"
+            )
+            
+            writer.write(x224_conn_request)
+            await writer.drain()
+            
+            # Read response (X.224 Connection Confirm or error)
+            response = await asyncio.wait_for(reader.read(256), timeout=3.0)
+            
+            banner = "RDP Service Detected"
+            
+            if len(response) >= 11:
+                # Check for Connection Confirm (0xd0)
+                if response[5] == 0xd0:
+                    # Check for RDP Negotiation Response
+                    if len(response) >= 19:
+                        neg_type = response[11] if len(response) > 11 else 0
+                        if neg_type == 0x02:  # TYPE_RDP_NEG_RSP
+                            flags = response[12] if len(response) > 12 else 0
+                            protocol = response[15] if len(response) > 15 else 0
+                            
+                            if protocol == 0x00:
+                                banner = "RDP (Standard RDP Security)"
+                            elif protocol == 0x01:
+                                banner = "RDP (TLS Security)"
+                            elif protocol == 0x02:
+                                banner = "RDP (CredSSP/NLA Required)"
+                            elif protocol == 0x03:
+                                banner = "RDP (TLS + CredSSP/NLA)"
+                            else:
+                                banner = f"RDP (Protocol: {protocol})"
+                        elif neg_type == 0x03:  # TYPE_RDP_NEG_FAILURE
+                            banner = "RDP (Negotiation Failed)"
+                        else:
+                            banner = "RDP (Unknown Response)"
+                    else:
+                        banner = "RDP (Legacy/No NLA)"
+                elif response[5] == 0x00:
+                    banner = "RDP (Connection Refused)"
+            
+            writer.close()
+            await writer.wait_closed()
+            
+            return Observation(
+                ip=ip_address, port=self.port, protocol="tcp", service="rdp",
+                latency_ms=latency, status="open", banner=banner
+            )
+            
+        except Exception as e:
+            return Observation(
+                ip=ip_address, port=self.port, protocol="tcp", service="rdp",
+                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+            )
+
 def get_probe(port: int) -> BaseProbe:
     """Factory function to return the correct probe class for a port."""
     if port in [80, 8080, 8000, 443, 8443]: 
@@ -510,5 +586,7 @@ def get_probe(port: int) -> BaseProbe:
         return TelnetProbe(port)
     if port == 1883:
         return MQTTProbe(port)
+    if port == 3389:
+        return RDPProbe(port)
         
     return TCPProbe(port)

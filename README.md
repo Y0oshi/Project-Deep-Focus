@@ -50,7 +50,7 @@ The tool is optimized for passive cooling systems (such as Apple M-series laptop
 | VNC | 5900 | Authentication type (None, Password, TLS) |
 | RTSP | 554 | Camera brand, authentication status |
 | MQTT | 1883 | Broker access (No-Auth detection) |
-| RDP | 3389 | Service availability |
+| RDP | 3389 | Security mode detection (NLA, TLS, Legacy) |
 
 ### Authentication Detection
 
@@ -243,6 +243,14 @@ Camera brands are identified when possible: Hikvision, Dahua, Axis, Foscam, Amcr
 | `Dropbear (Embedded/IoT)` | Lightweight SSH, often on IoT devices |
 | `MikroTik Router` | MikroTik network equipment |
 | `Cisco IOS` | Cisco network device |
+
+#### RDP (Port 3389)
+| Status | Meaning |
+|--------|---------|
+| `RDP (CredSSP/NLA Required)` | Network Level Auth - most secure |
+| `RDP (TLS Security)` | TLS encryption enabled |
+| `RDP (Standard RDP Security)` | Legacy encryption only |
+| `RDP (Legacy/No NLA)` | Old server, no modern auth |
 
 ---
 
