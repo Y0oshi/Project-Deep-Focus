@@ -136,6 +136,16 @@ def generate_layout(stats, churn, recent_services):
             Text(f"{conf}%", style=conf_style), 
             str(last)
         )
+    
+    # Show "Scanning..." if no discoveries yet
+    if not recent_services:
+        table.add_row(
+            "[dim]Scanning...[/dim]", 
+            "[dim]--[/dim]", 
+            "[dim]Waiting for discoveries[/dim]", 
+            "[dim]--[/dim]", 
+            "[dim]--[/dim]"
+        )
         
     layout["lower"].update(Panel(table, title="Live Index Feed"))
     
