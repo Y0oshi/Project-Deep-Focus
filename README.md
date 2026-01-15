@@ -46,8 +46,10 @@ The tool is optimized for passive cooling systems (such as Apple M-series laptop
 | HTTP/HTTPS | 80, 443, 8080, 8443 | Server type, response codes, page titles |
 | FTP | 21 | Anonymous access detection |
 | SSH | 22 | Server version, device type identification |
+| Telnet | 23 | Banner grabbing for routers/IoT |
 | VNC | 5900 | Authentication type (None, Password, TLS) |
 | RTSP | 554 | Camera brand, authentication status |
+| MQTT | 1883 | Broker access (No-Auth detection) |
 | RDP | 3389 | Service availability |
 
 ### Authentication Detection
@@ -57,6 +59,7 @@ The tool specifically identifies services that may be accessible without credent
 - **VNC**: Detects "None" authentication type (passwordless access)
 - **FTP**: Tests anonymous login capability
 - **RTSP**: Identifies cameras without authentication requirements
+- **MQTT**: Sends CONNECT handshake to detect open brokers (No-Auth)
 
 ### Thermal Management
 

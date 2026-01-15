@@ -10,8 +10,13 @@ from typing import List
 
 # Local imports
 sys.path.append(".") 
-from execution import db_manager, fingerprint, scheduler, probes
+from execution import db_manager, fingerprint, scheduler, probes, config
 
+# Fallback Port Map (Guaranteed values)
+COMMON_PORTS = {
+    21: "ftp", 22: "ssh", 23: "telnet", 80: "http", 443: "https",
+    554: "rtsp", 1883: "mqtt", 3389: "rdp", 5900: "vnc", 8080: "http-alt"
+}
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -42,7 +47,31 @@ async def worker(queue: asyncio.Queue, result_buffer: List, buffer_lock: asyncio
             
             # 4. Log Open Ports & Buffer Result
             if observation.status == "open":
-                logging.info(f"[+] {target_ip}:{port} OPEN | {analysis_result['vendor']} {analysis_result['product']}")
+                vendor = analysis_result['vendor']
+                product = analysis_result['product']
+                
+                # Visual Fallback: If unknown, try to look up service name
+                # Check for "unknown" string explicitly (default from fingerprint.py)
+                if str(vendor).lower() == "unknown" and str(product).lower() == "unknown":
+                    if port in COMMON_PORTS:
+                         svc_name = COMMON_PORTS[port]
+                         product = f"{svc_name} (Generic)"
+                         # Also update generic vendor/service_type for cleaner UI
+                         vendor = "Generic"
+                         obs_dict['analysis']['service_type'] = svc_name
+                         obs_dict['analysis']['vendor'] = vendor
+                    else:
+                        try:
+                            svc_name = socket.getservbyport(port)
+                            product = f"{svc_name} (Generic)"
+                            obs_dict['analysis']['service_type'] = svc_name
+                        except:
+                            pass
+                    
+                    # Update product in dict so it shows in Dashboard too
+                    obs_dict['analysis']['product'] = product 
+                
+                logging.info(f"[+] {target_ip}:{port} OPEN | {vendor} {product}")
                 
             async with buffer_lock:
                 result_buffer.append(obs_dict)
@@ -135,7 +164,7 @@ async def main():
     parser = argparse.ArgumentParser(description="Deep Focus Scanner Engine")
     parser.add_argument("--target", help="CIDR range to scan")
     parser.add_argument("--priority", type=int, default=1, help="Job priority")
-    parser.add_argument("--ports", help="Ports to scan (comma separated)", default="80,443,22,21,8080,5900,554,3389")
+    parser.add_argument("--ports", help="Ports to scan (comma separated)", default="80,443,22,21,8080,5900,554,3389,23,1883")
     parser.add_argument("--rate", type=int, default=300, help="Concurrent threads")
     parser.add_argument("--loop", action="store_true", help="Keep running continuously")
     parser.add_argument("--max-load", type=float, default=6.0, help="Thermal throttling threshold")

@@ -398,6 +398,102 @@ class RTSPProbe(BaseProbe):
                 latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
             )
 
+class TelnetProbe(BaseProbe):
+    """Telnet Probe for routers and IoT devices."""
+    async def run(self, ip_address: str) -> Observation:
+        start_time = time.time()
+        try:
+            conn = await asyncio.wait_for(
+                asyncio.open_connection(ip_address, self.port),
+                timeout=self.timeout
+            )
+            reader, writer = conn
+            latency = (time.time() - start_time) * 1000
+            
+            # Read initial banner (negotiation might be needed for some servers, 
+            # but many just dump text immediately)
+            banner = await asyncio.wait_for(reader.read(1024), timeout=2.0)
+            banner_str = banner.decode('utf-8', errors='ignore').strip()
+            # Clean up control characters (re is imported at top of file)
+            banner_str = re.sub(r'[^\x20-\x7E]', '', banner_str)
+            
+            writer.close()
+            await writer.wait_closed()
+            
+            return Observation(
+                ip=ip_address, port=self.port, protocol="tcp", service="telnet",
+                latency_ms=latency, status="open", banner=banner_str
+            )
+        except Exception as e:
+            return Observation(
+                ip=ip_address, port=self.port, protocol="tcp", service="telnet",
+                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+            )
+
+class MQTTProbe(BaseProbe):
+    """MQTT Probe checking for No-Auth Broker access."""
+    async def run(self, ip_address: str) -> Observation:
+        start_time = time.time()
+        try:
+            conn = await asyncio.wait_for(
+                asyncio.open_connection(ip_address, self.port),
+                timeout=self.timeout
+            )
+            reader, writer = conn
+            latency = (time.time() - start_time) * 1000
+            
+            # MQTT v3.1.1 CONNECT Packet (Standard)
+            # Fixed Header: 0x10 (Connect), Remaining Length
+            # Var Header: Proto Name (MQTT), Lvl(4), Flags(0x02=Clean), KeepAlive
+            # Payload: ClientID
+            
+            # Packet Construction:
+            # Fixed: 10 10 (Connect, Len=16)
+            # Proto: 00 04 4D 51 54 54 (Len, MQTT)
+            # Lvl: 04 
+            # Flags: 02 (Clean Session)
+            # KeepAlive: 00 3C (60s)
+            # ClientID: 00 04 74 65 73 74 (Len=4, "test")
+            connect_packet = bytes.fromhex("101000044D5154540402003C000474657374")
+            
+            writer.write(connect_packet)
+            await writer.drain()
+            
+            # Read CONNACK (Fixed: 20 02, Var: Flags, ReturnCode)
+            response = await asyncio.wait_for(reader.read(4), timeout=2.0)
+            
+            status_msg = "Unknown"
+            if len(response) >= 4 and response[0] == 0x20:
+                return_code = response[3]
+                if return_code == 0x00:
+                    status_msg = "Access ALLOWED (No Auth)"
+                elif return_code == 0x01:
+                    status_msg = "Refused: Protocol Version"
+                elif return_code == 0x02:
+                    status_msg = "Refused: ID Rejected"
+                elif return_code == 0x03:
+                    status_msg = "Refused: Server Unavailable"
+                elif return_code == 0x04:
+                    status_msg = "Refused: Bad User/Pass"
+                elif return_code == 0x05:
+                    status_msg = "Refused: Not Authorized"
+                else:
+                    status_msg = f"Refused: Code {return_code}"
+            
+            writer.close()
+            await writer.wait_closed()
+            
+            return Observation(
+                ip=ip_address, port=self.port, protocol="tcp", service="mqtt",
+                latency_ms=latency, status="open", banner=status_msg
+            )
+            
+        except Exception as e:
+            return Observation(
+                ip=ip_address, port=self.port, protocol="tcp", service="mqtt",
+                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+            )
+
 def get_probe(port: int) -> BaseProbe:
     """Factory function to return the correct probe class for a port."""
     if port in [80, 8080, 8000, 443, 8443]: 
@@ -410,5 +506,9 @@ def get_probe(port: int) -> BaseProbe:
         return SSHProbe(port)
     if port == 554:
         return RTSPProbe(port)
+    if port == 23:
+        return TelnetProbe(port)
+    if port == 1883:
+        return MQTTProbe(port)
         
     return TCPProbe(port)

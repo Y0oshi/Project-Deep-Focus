@@ -62,10 +62,11 @@ def fetch_analytics(db):
         cursor.execute("SELECT COUNT(*) FROM history")
         churn_events = cursor.fetchone()[0]
 
-        # Recent Discoveries Feed
+        # Recent Discoveries Feed (Only successful findings)
         query = """
             SELECT ip, port, service_type, vendor, product, banner, confidence, first_seen, last_seen 
             FROM services 
+            WHERE confidence > 0
             ORDER BY last_seen DESC 
             LIMIT 15
         """
