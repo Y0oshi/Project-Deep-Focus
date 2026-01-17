@@ -106,12 +106,15 @@ class TCPProbe(BaseProbe):
             )
 
 class HTTPProbe(BaseProbe):
-    """Probe for HTTP/HTTPS services, extracting headers and titles."""
+    """Probe for HTTP/HTTPS with TLS cert/cipher detection."""
     async def run(self, ip_address: str) -> Observation:
         start_time = time.time()
         try:
             # TLS Configuration
             ssl_ctx = None
+            cert_info = {}
+            cipher_info = None
+            
             if self.port in [443, 8443]:
                 ssl_ctx = ssl.create_default_context()
                 ssl_ctx.check_hostname = False
@@ -121,6 +124,35 @@ class HTTPProbe(BaseProbe):
                 asyncio.open_connection(ip_address, self.port, ssl=ssl_ctx), 
                 timeout=self.timeout
             )
+            
+            # Extract TLS info if HTTPS
+            if ssl_ctx:
+                ssl_obj = writer.get_extra_info('ssl_object')
+                if ssl_obj:
+                    # Get cipher suite
+                    cipher = ssl_obj.cipher()
+                    if cipher:
+                        cipher_info = f"{cipher[0]} ({cipher[1]})"
+                    
+                    # Get certificate
+                    try:
+                        cert = ssl_obj.getpeercert(binary_form=False)
+                        if cert:
+                            # Extract subject and issuer
+                            subject = dict(x[0] for x in cert.get('subject', []))
+                            issuer = dict(x[0] for x in cert.get('issuer', []))
+                            
+                            cert_info['subject_cn'] = subject.get('commonName', 'Unknown')
+                            cert_info['issuer_cn'] = issuer.get('commonName', 'Unknown')
+                            cert_info['not_after'] = cert.get('notAfter', 'Unknown')
+                            
+                            # Self-signed detection: issuer CN == subject CN
+                            if cert_info['subject_cn'] == cert_info['issuer_cn']:
+                                cert_info['self_signed'] = True
+                            else:
+                                cert_info['self_signed'] = False
+                    except:
+                        pass
             
             # Send Minimal HTTP Request
             req = f"GET / HTTP/1.1\r\nHost: {ip_address}\r\nUser-Agent: DeepFocus/1.0\r\nConnection: close\r\n\r\n"
@@ -162,9 +194,22 @@ class HTTPProbe(BaseProbe):
                         k, v = line.split(": ", 1)
                         headers[k.lower()] = v
             
+            # Build enhanced banner for HTTPS
+            service_type = "https" if ssl_ctx else "http"
+            banner_parts = [head_part[:200]]  # Truncate header
+            
+            if cipher_info:
+                banner_parts.append(f"Cipher:[{cipher_info}]")
+            
+            if cert_info:
+                self_signed_tag = "[SELF-SIGNED]" if cert_info.get('self_signed') else ""
+                banner_parts.append(f"Cert:[{cert_info.get('subject_cn', '?')}] Issuer:[{cert_info.get('issuer_cn', '?')}] {self_signed_tag}")
+            
+            final_banner = " | ".join(banner_parts)
+            
             return Observation(
-                ip=ip_address, port=self.port, protocol="tcp", service="https" if ssl_ctx else "http",
-                latency_ms=latency, status="open", banner=head_part,
+                ip=ip_address, port=self.port, protocol="tcp", service=service_type,
+                latency_ms=latency, status="open", banner=final_banner,
                 headers=headers, body=body, response_code=status_code
             )
             
@@ -173,6 +218,7 @@ class HTTPProbe(BaseProbe):
                 ip=ip_address, port=self.port, protocol="tcp", service="http",
                 latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
             )
+
 
 class VNCProbe(BaseProbe):
     """VNC (RFB) Probe checking for NO-AUTH configurations."""
@@ -299,7 +345,7 @@ class FTPProbe(BaseProbe):
             )
 
 class SSHProbe(BaseProbe):
-    """SSH Probe indentifying server versions and device types."""
+    """SSH Probe with full cipher/kex/MAC enumeration."""
     async def run(self, ip_address: str) -> Observation:
         start_time = time.time()
         try:
@@ -310,24 +356,74 @@ class SSHProbe(BaseProbe):
             reader, writer = conn
             latency = (time.time() - start_time) * 1000
             
-            # Read Server Banner
-            server_banner = await asyncio.wait_for(reader.read(256), timeout=2.0)
+            # 1. Read Server Banner (e.g., SSH-2.0-OpenSSH_8.9)
+            server_banner = await asyncio.wait_for(reader.readline(), timeout=2.0)
             banner_str = server_banner.decode('utf-8', errors='ignore').strip()
             
-            # Heuristics
-            device_info = "SSH Service"
-            banner_lower = banner_str.lower()
+            # 2. Send our client banner (required before KEX)
+            client_banner = b"SSH-2.0-DeepFocus_Scanner\r\n"
+            writer.write(client_banner)
+            await writer.drain()
             
+            # 3. Receive SSH_MSG_KEXINIT from server
+            # SSH packet: uint32 length, byte padding_len, byte msg_type, payload
+            kex_header = await asyncio.wait_for(reader.read(5), timeout=3.0)
+            if len(kex_header) < 5:
+                raise Exception("Short KEX header")
+            
+            packet_len = int.from_bytes(kex_header[0:4], 'big')
+            padding_len = kex_header[4]
+            
+            # Read rest of packet (limit to 32KB for safety)
+            packet_len = min(packet_len, 32768)
+            kex_payload = await asyncio.wait_for(reader.read(packet_len - 1), timeout=3.0)
+            
+            # Parse SSH_MSG_KEXINIT (msg_type = 20)
+            crypto_info = {}
+            if len(kex_payload) > 17 and kex_payload[0] == 20:  # SSH_MSG_KEXINIT
+                # Skip: msg_type(1) + cookie(16) = 17 bytes
+                offset = 17
+                
+                # Helper to read name-list (uint32 len + comma-separated string)
+                def read_namelist(data, off):
+                    if off + 4 > len(data):
+                        return [], off
+                    length = int.from_bytes(data[off:off+4], 'big')
+                    off += 4
+                    if off + length > len(data):
+                        return [], off
+                    names = data[off:off+length].decode('utf-8', errors='ignore')
+                    return names.split(','), off + length
+                
+                # Read algorithm lists in order per RFC 4253
+                crypto_info['kex_algorithms'], offset = read_namelist(kex_payload, offset)
+                crypto_info['host_key_algorithms'], offset = read_namelist(kex_payload, offset)
+                crypto_info['ciphers_client_to_server'], offset = read_namelist(kex_payload, offset)
+                crypto_info['ciphers_server_to_client'], offset = read_namelist(kex_payload, offset)
+                crypto_info['mac_client_to_server'], offset = read_namelist(kex_payload, offset)
+                crypto_info['mac_server_to_client'], offset = read_namelist(kex_payload, offset)
+            
+            # 4. Build summary
+            device_info = "SSH"
+            banner_lower = banner_str.lower()
             if "dropbear" in banner_lower:
-                device_info = "Dropbear (Embedded/IoT)"
+                device_info = "Dropbear (IoT)"
             elif "cisco" in banner_lower:
                 device_info = "Cisco IOS"
             elif "mikrotik" in banner_lower:
-                device_info = "MikroTik Router"
+                device_info = "MikroTik"
             elif "openssh" in banner_lower:
-                 device_info = "OpenSSH"
-                 
-            final_banner = f"{banner_str} | Device: [{device_info}]"
+                device_info = "OpenSSH"
+            
+            # Format crypto summary (top 3 of each)
+            kex = crypto_info.get('kex_algorithms', [])[:3]
+            ciphers = crypto_info.get('ciphers_client_to_server', [])[:3]
+            macs = crypto_info.get('mac_client_to_server', [])[:3]
+            hostkeys = crypto_info.get('host_key_algorithms', [])[:3]
+            
+            crypto_summary = f"KEX:[{','.join(kex)}] Ciphers:[{','.join(ciphers)}] MACs:[{','.join(macs)}] HostKeys:[{','.join(hostkeys)}]"
+            
+            final_banner = f"{banner_str} | {device_info} | {crypto_summary}"
             
             writer.close()
             await writer.wait_closed()
@@ -342,6 +438,7 @@ class SSHProbe(BaseProbe):
                 ip=ip_address, port=self.port, protocol="tcp", service="ssh",
                 latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
             )
+
 
 class RTSPProbe(BaseProbe):
     """RTSP Probe for IP Cameras (Port 554) with Auth Detection."""
@@ -569,6 +666,141 @@ class RDPProbe(BaseProbe):
                 ip=ip_address, port=self.port, protocol="tcp", service="rdp",
                 latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
             )
+class SMTPProbe(BaseProbe):
+    """SMTP Probe with STARTTLS cipher detection."""
+    async def run(self, ip_address: str) -> Observation:
+        start_time = time.time()
+        try:
+            conn = await asyncio.wait_for(
+                asyncio.open_connection(ip_address, self.port),
+                timeout=self.timeout
+            )
+            reader, writer = conn
+            latency = (time.time() - start_time) * 1000
+            
+            # Read banner
+            banner = await asyncio.wait_for(reader.readline(), timeout=2.0)
+            banner_str = banner.decode('utf-8', errors='ignore').strip()
+            
+            # Send EHLO
+            writer.write(b"EHLO deepfocus.local\r\n")
+            await writer.drain()
+            
+            # Read EHLO response (multi-line)
+            ehlo_response = ""
+            while True:
+                line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+                ehlo_response += line.decode('utf-8', errors='ignore')
+                if line[3:4] == b' ':  # Last line has space after code
+                    break
+            
+            cipher_info = None
+            starttls_supported = "STARTTLS" in ehlo_response.upper()
+            
+            if starttls_supported:
+                # Issue STARTTLS
+                writer.write(b"STARTTLS\r\n")
+                await writer.drain()
+                
+                response = await asyncio.wait_for(reader.readline(), timeout=2.0)
+                if response.startswith(b"220"):
+                    # Upgrade to TLS
+                    ssl_ctx = ssl.create_default_context()
+                    ssl_ctx.check_hostname = False
+                    ssl_ctx.verify_mode = ssl.CERT_NONE
+                    
+                    # Wrap the socket
+                    transport = writer.transport
+                    protocol = transport.get_protocol()
+                    await writer.drain()
+                    
+                    # Create TLS layer
+                    new_transport = await asyncio.get_event_loop().start_tls(
+                        transport, protocol, ssl_ctx, server_hostname=ip_address
+                    )
+                    
+                    # Get cipher
+                    ssl_obj = new_transport.get_extra_info('ssl_object')
+                    if ssl_obj:
+                        cipher = ssl_obj.cipher()
+                        if cipher:
+                            cipher_info = f"{cipher[0]} ({cipher[1]})"
+            
+            writer.close()
+            await writer.wait_closed()
+            
+            final_banner = f"{banner_str} | STARTTLS:[{'YES' if starttls_supported else 'NO'}]"
+            if cipher_info:
+                final_banner += f" | Cipher:[{cipher_info}]"
+            
+            return Observation(
+                ip=ip_address, port=self.port, protocol="tcp", service="smtp",
+                latency_ms=latency, status="open", banner=final_banner
+            )
+            
+        except Exception as e:
+            return Observation(
+                ip=ip_address, port=self.port, protocol="tcp", service="smtp",
+                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+            )
+
+class LDAPSProbe(BaseProbe):
+    """LDAPS Probe (Port 636) with TLS cipher detection."""
+    async def run(self, ip_address: str) -> Observation:
+        start_time = time.time()
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+            
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip_address, self.port, ssl=ssl_ctx),
+                timeout=self.timeout
+            )
+            latency = (time.time() - start_time) * 1000
+            
+            # Get cipher suite
+            ssl_obj = writer.get_extra_info('ssl_object')
+            cipher_info = None
+            cert_info = {}
+            
+            if ssl_obj:
+                cipher = ssl_obj.cipher()
+                if cipher:
+                    cipher_info = f"{cipher[0]} ({cipher[1]})"
+                
+                # Get certificate
+                try:
+                    cert = ssl_obj.getpeercert(binary_form=False)
+                    if cert:
+                        subject = dict(x[0] for x in cert.get('subject', []))
+                        issuer = dict(x[0] for x in cert.get('issuer', []))
+                        cert_info['subject_cn'] = subject.get('commonName', 'Unknown')
+                        cert_info['issuer_cn'] = issuer.get('commonName', 'Unknown')
+                        cert_info['self_signed'] = cert_info['subject_cn'] == cert_info['issuer_cn']
+                except:
+                    pass
+            
+            writer.close()
+            await writer.wait_closed()
+            
+            banner = "LDAPS Service"
+            if cipher_info:
+                banner += f" | Cipher:[{cipher_info}]"
+            if cert_info:
+                self_signed_tag = "[SELF-SIGNED]" if cert_info.get('self_signed') else ""
+                banner += f" | Cert:[{cert_info.get('subject_cn', '?')}] {self_signed_tag}"
+            
+            return Observation(
+                ip=ip_address, port=self.port, protocol="tcp", service="ldaps",
+                latency_ms=latency, status="open", banner=banner
+            )
+            
+        except Exception as e:
+            return Observation(
+                ip=ip_address, port=self.port, protocol="tcp", service="ldaps",
+                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+            )
 
 def get_probe(port: int) -> BaseProbe:
     """Factory function to return the correct probe class for a port."""
@@ -588,5 +820,9 @@ def get_probe(port: int) -> BaseProbe:
         return MQTTProbe(port)
     if port == 3389:
         return RDPProbe(port)
+    if port in [25, 587]:
+        return SMTPProbe(port)
+    if port == 636:
+        return LDAPSProbe(port)
         
     return TCPProbe(port)

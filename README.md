@@ -43,12 +43,14 @@ The tool is optimized for passive cooling systems (such as Apple M-series laptop
 
 | Service | Port | Detection Capabilities |
 |---------|------|------------------------|
-| HTTP/HTTPS | 80, 443, 8080, 8443 | Server type, response codes, page titles |
+| HTTP/HTTPS | 80, 443, 8080, 8443 | Server type, TLS cipher, cert issuer, **self-signed detection** |
 | FTP | 21 | Anonymous access detection |
-| SSH | 22 | Server version, device type identification |
+| SSH | 22 | Version, **key exchange, ciphers, MACs, host keys** |
 | Telnet | 23 | Banner grabbing for routers/IoT |
+| SMTP | 25, 587 | **STARTTLS detection, TLS cipher suite** |
 | VNC | 5900 | Authentication type (None, Password, TLS) |
 | RTSP | 554 | Camera brand, authentication status |
+| LDAPS | 636 | **TLS cipher, cert info, self-signed detection** |
 | MQTT | 1883 | Broker access (No-Auth detection) |
 | RDP | 3389 | Security mode detection (NLA, TLS, Legacy) |
 
