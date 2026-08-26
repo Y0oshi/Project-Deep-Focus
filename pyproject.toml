@@ -18,7 +18,7 @@ requires-python = ">=3.8"
 dependencies = [
     "aiosqlite>=0.17.0",
     "rich>=13.0.0",
-    "click>=8.0.0",
+    "cryptography>=42.0",
 ]
 
 [project.urls]

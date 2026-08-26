@@ -1,39 +1,77 @@
 import asyncio
+import re
 import time
 import ssl
 from dataclasses import dataclass, field
 from typing import Optional, Dict
 
+
+def _error_status(exc: Exception) -> str:
+    """Map a probe exception to a normalized Observation status string.
+
+    Distinguishes timeout (filtered/no response) from closed (RST) and other
+    errors, instead of collapsing everything into 'closed'.
+    """
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return "timeout"
+    if isinstance(exc, ConnectionRefusedError):
+        return "closed"
+    return "error"
+
+
+def _extract_cert_info(ssl_obj) -> Dict[str, str]:
+    """Extract TLS certificate metadata from an SSL object.
+
+    With verify_mode=CERT_NONE, getpeercert(binary_form=False) returns {} (the
+    decoded cert is not retained), so we fetch the DER bytes and decode them
+    with `cryptography` when available. Falls back to an empty dict gracefully.
+    """
+    cert_info: Dict[str, str] = {}
+    der = ssl_obj.getpeercert(binary_form=True)
+    if not der:
+        return cert_info
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+
+        cert = x509.load_der_x509_certificate(der)
+
+        def cn(name):
+            attrs = name.get_attributes_for_oid(NameOID.COMMON_NAME)
+            return attrs[0].value if attrs else "Unknown"
+
+        cert_info["subject_cn"] = cn(cert.subject)
+        cert_info["issuer_cn"] = cn(cert.issuer)
+        cert_info["self_signed"] = cert.subject == cert.issuer
+
+        not_after = getattr(cert, "not_valid_after_utc", None)
+        if not_after is not None:
+            cert_info["not_after"] = not_after.isoformat()
+    except Exception:
+        # cryptography not installed or cert could not be decoded.
+        pass
+    return cert_info
+
+
 @dataclass
 class Observation:
-    """
-    Standardized data contract for all probe outputs.
-    Ensures consistent data structure for fingerprinting and storage logic.
-    """
-    # Transport Metadata
+    """Standardized result every probe returns."""
     ip: str
     port: int
-    protocol: str       # tcp, udp
-    service: str        # http, ssh, rtsp, etc. (inferred from probe type)
+    protocol: str
+    service: str
     latency_ms: float
-    status: str         # open, closed, filtered, timeout, error
-    
+    status: str  # open, closed, timeout, error
+
     timestamp: float = field(default_factory=time.time)
-    
-    # Error Context
     error_reason: Optional[str] = None
-    
-    # Identity Signals
     banner: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict)
     body: Optional[str] = None
-    cert_info: Dict[str, str] = field(default_factory=dict) # TLS Cert Info
-    
-    # Behavioral Signals
-    response_code: Optional[int] = None # HTTP Status Code, etc.
-    
+    cert_info: Dict[str, str] = field(default_factory=dict)
+    response_code: Optional[int] = None
+
     def to_dict(self):
-        """Convert observation to dictionary for analyzing pipeline."""
         return {
             "ip": self.ip,
             "port": self.port,
@@ -61,7 +99,7 @@ class BaseProbe:
         raise NotImplementedError
 
 class TCPProbe(BaseProbe):
-    """Basic TCP Connect Probe usually for generic ports."""
+    """Generic TCP connect probe."""
     async def run(self, ip_address: str) -> Observation:
         start_time = time.time()
         try:
@@ -71,15 +109,13 @@ class TCPProbe(BaseProbe):
             )
             reader, writer = conn
             latency = (time.time() - start_time) * 1000
-            
-            # Simple Banner Grab
+
             banner = ""
             try:
-                # Read initial greeting if any
                 data = await asyncio.wait_for(reader.read(1024), timeout=1.0)
                 banner = data.decode('utf-8', errors='ignore').strip()
             except (asyncio.TimeoutError, Exception):
-                pass # Connection works, just no banner
+                pass
                 
             writer.close()
             await writer.wait_closed()
@@ -110,93 +146,67 @@ class HTTPProbe(BaseProbe):
     async def run(self, ip_address: str) -> Observation:
         start_time = time.time()
         try:
-            # TLS Configuration
             ssl_ctx = None
             cert_info = {}
             cipher_info = None
-            
+
             if self.port in [443, 8443]:
                 ssl_ctx = ssl.create_default_context()
                 ssl_ctx.check_hostname = False
                 ssl_ctx.verify_mode = ssl.CERT_NONE
-            
+
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip_address, self.port, ssl=ssl_ctx), 
+                asyncio.open_connection(ip_address, self.port, ssl=ssl_ctx),
                 timeout=self.timeout
             )
-            
-            # Extract TLS info if HTTPS
+
+            # Grab cipher and cert for TLS connections.
             if ssl_ctx:
                 ssl_obj = writer.get_extra_info('ssl_object')
                 if ssl_obj:
-                    # Get cipher suite
                     cipher = ssl_obj.cipher()
                     if cipher:
                         cipher_info = f"{cipher[0]} ({cipher[1]})"
-                    
-                    # Get certificate
-                    try:
-                        cert = ssl_obj.getpeercert(binary_form=False)
-                        if cert:
-                            # Extract subject and issuer
-                            subject = dict(x[0] for x in cert.get('subject', []))
-                            issuer = dict(x[0] for x in cert.get('issuer', []))
-                            
-                            cert_info['subject_cn'] = subject.get('commonName', 'Unknown')
-                            cert_info['issuer_cn'] = issuer.get('commonName', 'Unknown')
-                            cert_info['not_after'] = cert.get('notAfter', 'Unknown')
-                            
-                            # Self-signed detection: issuer CN == subject CN
-                            if cert_info['subject_cn'] == cert_info['issuer_cn']:
-                                cert_info['self_signed'] = True
-                            else:
-                                cert_info['self_signed'] = False
-                    except:
-                        pass
-            
-            # Send Minimal HTTP Request
+                    cert_info = _extract_cert_info(ssl_obj)
+
             req = f"GET / HTTP/1.1\r\nHost: {ip_address}\r\nUser-Agent: DeepFocus/1.0\r\nConnection: close\r\n\r\n"
             writer.write(req.encode())
             await writer.drain()
-            
-            # Read Response
+
             data = await asyncio.wait_for(reader.read(4096), timeout=self.timeout)
             latency = (time.time() - start_time) * 1000
-            
+
             writer.close()
             await writer.wait_closed()
-            
+
             raw_response = data.decode('utf-8', errors='ignore')
-            
-            # Basic Parsing
+
             headers = {}
             body = None
             status_code = None
-            
+
             parts = raw_response.split('\r\n\r\n', 1)
             head_part = parts[0]
             if len(parts) > 1:
                 body = parts[1]
-                
+
             lines = head_part.split('\r\n')
             if lines:
-                # Parse Status Line (e.g. HTTP/1.1 200 OK)
                 status_line = lines[0]
                 if " " in status_line:
                     try:
                         status_code = int(status_line.split(" ")[1])
                     except ValueError:
                         pass
-                
-                # Parse Headers
+
                 for line in lines[1:]:
                     if ": " in line:
                         k, v = line.split(": ", 1)
                         headers[k.lower()] = v
-            
-            # Build enhanced banner for HTTPS
+
+            # Append cipher/cert info to the banner.
             service_type = "https" if ssl_ctx else "http"
-            banner_parts = [head_part[:200]]  # Truncate header
+            banner_parts = [head_part[:200]]
             
             if cipher_info:
                 banner_parts.append(f"Cipher:[{cipher_info}]")
@@ -210,13 +220,14 @@ class HTTPProbe(BaseProbe):
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service=service_type,
                 latency_ms=latency, status="open", banner=final_banner,
-                headers=headers, body=body, response_code=status_code
+                headers=headers, body=body, response_code=status_code,
+                cert_info=cert_info
             )
             
         except Exception as e:
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service="http",
-                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+                latency_ms=(time.time() - start_time) * 1000, status=_error_status(e), error_reason=str(e)
             )
 
 
@@ -232,28 +243,23 @@ class VNCProbe(BaseProbe):
             reader, writer = conn
             latency = (time.time() - start_time) * 1000
             
-            # 1. Handshake Phase: Server Version
             server_version = await asyncio.wait_for(reader.read(12), timeout=2.0)
-            
-            # 2. Echo Version to Server
             writer.write(server_version)
             await writer.drain()
-            
-            # 3. Read Security Types offered
+
             sec_types_len_byte = await asyncio.wait_for(reader.read(1), timeout=2.0)
             if not sec_types_len_byte:
                 raise Exception("Empty security payload")
-                
+
             num_types = int.from_bytes(sec_types_len_byte, "big")
-            
+
             if num_types == 0:
-                # Server sent failure reason
+                # Server sent a failure reason instead of security types.
                 reason = await reader.read(100)
                 banner = f"{server_version.decode().strip()} (Connect Failed: {reason.decode().strip()})"
             else:
                 sec_types = await asyncio.wait_for(reader.read(num_types), timeout=2.0)
-                
-                # Identify Auth Types
+
                 types_desc = []
                 for b in sec_types:
                     if b == 1: types_desc.append("None (OPEN)")
@@ -276,7 +282,7 @@ class VNCProbe(BaseProbe):
         except Exception as e:
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service="vnc",
-                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+                latency_ms=(time.time() - start_time) * 1000, status=_error_status(e), error_reason=str(e)
             )
 
 class FTPProbe(BaseProbe):
@@ -291,14 +297,12 @@ class FTPProbe(BaseProbe):
             reader, writer = conn
             latency = (time.time() - start_time) * 1000
             
-            # 1. Read Initial Banner
             banner = await asyncio.wait_for(reader.read(1024), timeout=2.0)
             banner_str = banner.decode('utf-8', errors='ignore').strip()
-            
+
             auth_status = "Unknown"
-            
+
             if banner_str.startswith("220"):
-                 # Attempt Anonymous Login
                 writer.write(b"USER anonymous\r\n")
                 await writer.drain()
                 
@@ -323,6 +327,8 @@ class FTPProbe(BaseProbe):
                      auth_status = "Anonymous Access ALLOWED (No Pass)"
                 elif resp_user_str.startswith("530"):
                      auth_status = "Anonymous User Rejected"
+                elif resp_user_str.startswith("550"):
+                     auth_status = "Anonymous User Rejected (550)"
                 elif resp_user_str.startswith("500") or "auth" in resp_user_str.lower():
                      auth_status = "Encryption Required (AUTH TLS)"
                 else:
@@ -341,7 +347,7 @@ class FTPProbe(BaseProbe):
         except Exception as e:
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service="ftp",
-                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+                latency_ms=(time.time() - start_time) * 1000, status=_error_status(e), error_reason=str(e)
             )
 
 class SSHProbe(BaseProbe):
@@ -356,24 +362,21 @@ class SSHProbe(BaseProbe):
             reader, writer = conn
             latency = (time.time() - start_time) * 1000
             
-            # 1. Read Server Banner (e.g., SSH-2.0-OpenSSH_8.9)
             server_banner = await asyncio.wait_for(reader.readline(), timeout=2.0)
             banner_str = server_banner.decode('utf-8', errors='ignore').strip()
             
-            # 2. Send our client banner (required before KEX)
+            # Both sides send a banner before key exchange begins.
             client_banner = b"SSH-2.0-DeepFocus_Scanner\r\n"
             writer.write(client_banner)
             await writer.drain()
             
-            # 3. Receive SSH_MSG_KEXINIT from server
-            # SSH packet: uint32 length, byte padding_len, byte msg_type, payload
+            # Binary packet: 4-byte length, then payload.
             kex_header = await asyncio.wait_for(reader.read(5), timeout=3.0)
             if len(kex_header) < 5:
                 raise Exception("Short KEX header")
             
             packet_len = int.from_bytes(kex_header[0:4], 'big')
-            padding_len = kex_header[4]
-            
+
             # Read rest of packet (limit to 32KB for safety)
             packet_len = min(packet_len, 32768)
             kex_payload = await asyncio.wait_for(reader.read(packet_len - 1), timeout=3.0)
@@ -403,7 +406,6 @@ class SSHProbe(BaseProbe):
                 crypto_info['mac_client_to_server'], offset = read_namelist(kex_payload, offset)
                 crypto_info['mac_server_to_client'], offset = read_namelist(kex_payload, offset)
             
-            # 4. Build summary
             device_info = "SSH"
             banner_lower = banner_str.lower()
             if "dropbear" in banner_lower:
@@ -415,7 +417,7 @@ class SSHProbe(BaseProbe):
             elif "openssh" in banner_lower:
                 device_info = "OpenSSH"
             
-            # Format crypto summary (top 3 of each)
+            # top 3 of each algorithm list
             kex = crypto_info.get('kex_algorithms', [])[:3]
             ciphers = crypto_info.get('ciphers_client_to_server', [])[:3]
             macs = crypto_info.get('mac_client_to_server', [])[:3]
@@ -436,7 +438,7 @@ class SSHProbe(BaseProbe):
         except Exception as e:
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service="ssh",
-                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+                latency_ms=(time.time() - start_time) * 1000, status=_error_status(e), error_reason=str(e)
             )
 
 
@@ -452,7 +454,6 @@ class RTSPProbe(BaseProbe):
             reader, writer = conn
             latency = (time.time() - start_time) * 1000
             
-            # Send RTSP OPTIONS (The 'Hello' of cameras)
             rtsp_request = f"OPTIONS rtsp://{ip_address}:{self.port}/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: DeepFocus\r\n\r\n"
             writer.write(rtsp_request.encode())
             await writer.drain()
@@ -460,7 +461,6 @@ class RTSPProbe(BaseProbe):
             response = await asyncio.wait_for(reader.read(1024), timeout=2.0)
             response_str = response.decode('utf-8', errors='ignore')
             
-            # Analyze Auth Status
             auth_status = "Unknown"
             camera_brand = "RTSP Camera"
             
@@ -471,7 +471,6 @@ class RTSPProbe(BaseProbe):
             elif "RTSP/1.0 403" in response_str:
                 auth_status = "Forbidden"
             
-            # Identify Brand
             resp_lower = response_str.lower()
             brands = ["hikvision", "dahua", "axis", "foscam", "amcrest", "reolink", "ubiquiti"]
             for brand in brands:
@@ -492,7 +491,7 @@ class RTSPProbe(BaseProbe):
         except Exception as e:
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service="rtsp",
-                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+                latency_ms=(time.time() - start_time) * 1000, status=_error_status(e), error_reason=str(e)
             )
 
 class TelnetProbe(BaseProbe):
@@ -507,12 +506,9 @@ class TelnetProbe(BaseProbe):
             reader, writer = conn
             latency = (time.time() - start_time) * 1000
             
-            # Read initial banner (negotiation might be needed for some servers, 
-            # but many just dump text immediately)
             banner = await asyncio.wait_for(reader.read(1024), timeout=2.0)
             banner_str = banner.decode('utf-8', errors='ignore').strip()
-            # Clean up control characters (re is imported at top of file)
-            banner_str = re.sub(r'[^\x20-\x7E]', '', banner_str)
+            banner_str = re.sub(r'[^\x20-\x7E]', '', banner_str)  # strip control chars
             
             writer.close()
             await writer.wait_closed()
@@ -524,7 +520,7 @@ class TelnetProbe(BaseProbe):
         except Exception as e:
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service="telnet",
-                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+                latency_ms=(time.time() - start_time) * 1000, status=_error_status(e), error_reason=str(e)
             )
 
 class MQTTProbe(BaseProbe):
@@ -539,18 +535,7 @@ class MQTTProbe(BaseProbe):
             reader, writer = conn
             latency = (time.time() - start_time) * 1000
             
-            # MQTT v3.1.1 CONNECT Packet (Standard)
-            # Fixed Header: 0x10 (Connect), Remaining Length
-            # Var Header: Proto Name (MQTT), Lvl(4), Flags(0x02=Clean), KeepAlive
-            # Payload: ClientID
-            
-            # Packet Construction:
-            # Fixed: 10 10 (Connect, Len=16)
-            # Proto: 00 04 4D 51 54 54 (Len, MQTT)
-            # Lvl: 04 
-            # Flags: 02 (Clean Session)
-            # KeepAlive: 00 3C (60s)
-            # ClientID: 00 04 74 65 73 74 (Len=4, "test")
+            # MQTT v3.1.1 CONNECT with clean session, no auth.
             connect_packet = bytes.fromhex("101000044D5154540402003C000474657374")
             
             writer.write(connect_packet)
@@ -588,7 +573,7 @@ class MQTTProbe(BaseProbe):
         except Exception as e:
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service="mqtt",
-                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+                latency_ms=(time.time() - start_time) * 1000, status=_error_status(e), error_reason=str(e)
             )
 
 class RDPProbe(BaseProbe):
@@ -603,15 +588,7 @@ class RDPProbe(BaseProbe):
             reader, writer = conn
             latency = (time.time() - start_time) * 1000
             
-            # X.224 Connection Request (CR) - Standard RDP negotiation
-            # This is a minimal TPKT + X.224 CR packet requesting RDP
-            # TPKT Header: 03 00 00 13 (version 3, reserved, length 19)
-            # X.224 CR: 0e e0 00 00 00 00 00 01 00 08 00 03 00 00 00
-            #   - Length: 14 (0x0e)
-            #   - CR code: 0xe0
-            #   - Dst/Src ref: 00 00 / 00 00
-            #   - Class: 00
-            #   - Cookie/Negotiation Request follows
+            # Minimal TPKT + X.224 Connection Request to start RDP negotiation.
             x224_conn_request = bytes.fromhex(
                 "030000130ee000000000000100080003000000"
             )
@@ -619,19 +596,16 @@ class RDPProbe(BaseProbe):
             writer.write(x224_conn_request)
             await writer.drain()
             
-            # Read response (X.224 Connection Confirm or error)
             response = await asyncio.wait_for(reader.read(256), timeout=3.0)
-            
+
             banner = "RDP Service Detected"
-            
+
             if len(response) >= 11:
-                # Check for Connection Confirm (0xd0)
+                # Connection Confirm is byte 0xd0.
                 if response[5] == 0xd0:
-                    # Check for RDP Negotiation Response
                     if len(response) >= 19:
                         neg_type = response[11] if len(response) > 11 else 0
                         if neg_type == 0x02:  # TYPE_RDP_NEG_RSP
-                            flags = response[12] if len(response) > 12 else 0
                             protocol = response[15] if len(response) > 15 else 0
                             
                             if protocol == 0x00:
@@ -664,7 +638,7 @@ class RDPProbe(BaseProbe):
         except Exception as e:
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service="rdp",
-                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+                latency_ms=(time.time() - start_time) * 1000, status=_error_status(e), error_reason=str(e)
             )
 class SMTPProbe(BaseProbe):
     """SMTP Probe with STARTTLS cipher detection."""
@@ -678,48 +652,40 @@ class SMTPProbe(BaseProbe):
             reader, writer = conn
             latency = (time.time() - start_time) * 1000
             
-            # Read banner
             banner = await asyncio.wait_for(reader.readline(), timeout=2.0)
             banner_str = banner.decode('utf-8', errors='ignore').strip()
-            
-            # Send EHLO
+
             writer.write(b"EHLO deepfocus.local\r\n")
             await writer.drain()
-            
-            # Read EHLO response (multi-line)
+
             ehlo_response = ""
             while True:
                 line = await asyncio.wait_for(reader.readline(), timeout=2.0)
                 ehlo_response += line.decode('utf-8', errors='ignore')
-                if line[3:4] == b' ':  # Last line has space after code
+                if line[3:4] == b' ':  # last line has a space after the code
                     break
             
             cipher_info = None
             starttls_supported = "STARTTLS" in ehlo_response.upper()
             
             if starttls_supported:
-                # Issue STARTTLS
                 writer.write(b"STARTTLS\r\n")
                 await writer.drain()
-                
+
                 response = await asyncio.wait_for(reader.readline(), timeout=2.0)
                 if response.startswith(b"220"):
-                    # Upgrade to TLS
                     ssl_ctx = ssl.create_default_context()
                     ssl_ctx.check_hostname = False
                     ssl_ctx.verify_mode = ssl.CERT_NONE
-                    
-                    # Wrap the socket
+
                     transport = writer.transport
                     protocol = transport.get_protocol()
                     await writer.drain()
-                    
-                    # Create TLS layer
+
                     new_transport = await asyncio.get_event_loop().start_tls(
                         transport, protocol, ssl_ctx, server_hostname=ip_address
                     )
-                    
-                    # Get cipher
+
                     ssl_obj = new_transport.get_extra_info('ssl_object')
                     if ssl_obj:
                         cipher = ssl_obj.cipher()
@@ -741,7 +707,7 @@ class SMTPProbe(BaseProbe):
         except Exception as e:
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service="smtp",
-                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+                latency_ms=(time.time() - start_time) * 1000, status=_error_status(e), error_reason=str(e)
             )
 
 class LDAPSProbe(BaseProbe):
@@ -759,27 +725,15 @@ class LDAPSProbe(BaseProbe):
             )
             latency = (time.time() - start_time) * 1000
             
-            # Get cipher suite
             ssl_obj = writer.get_extra_info('ssl_object')
             cipher_info = None
             cert_info = {}
-            
+
             if ssl_obj:
                 cipher = ssl_obj.cipher()
                 if cipher:
                     cipher_info = f"{cipher[0]} ({cipher[1]})"
-                
-                # Get certificate
-                try:
-                    cert = ssl_obj.getpeercert(binary_form=False)
-                    if cert:
-                        subject = dict(x[0] for x in cert.get('subject', []))
-                        issuer = dict(x[0] for x in cert.get('issuer', []))
-                        cert_info['subject_cn'] = subject.get('commonName', 'Unknown')
-                        cert_info['issuer_cn'] = issuer.get('commonName', 'Unknown')
-                        cert_info['self_signed'] = cert_info['subject_cn'] == cert_info['issuer_cn']
-                except:
-                    pass
+                cert_info = _extract_cert_info(ssl_obj)
             
             writer.close()
             await writer.wait_closed()
@@ -793,13 +747,14 @@ class LDAPSProbe(BaseProbe):
             
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service="ldaps",
-                latency_ms=latency, status="open", banner=banner
+                latency_ms=latency, status="open", banner=banner,
+                cert_info=cert_info
             )
             
         except Exception as e:
             return Observation(
                 ip=ip_address, port=self.port, protocol="tcp", service="ldaps",
-                latency_ms=(time.time() - start_time) * 1000, status="closed", error_reason=str(e)
+                latency_ms=(time.time() - start_time) * 1000, status=_error_status(e), error_reason=str(e)
             )
 
 def get_probe(port: int) -> BaseProbe:

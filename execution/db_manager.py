@@ -1,11 +1,10 @@
 import aiosqlite
 import logging
 import datetime
-import asyncio
 from pathlib import Path
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple
 
-DB_PATH = Path("results.db")
+DB_PATH = Path(__file__).resolve().parent.parent / "results.db"
 
 INIT_SCRIPT = """
 -- Hosts: Basic IP info
@@ -65,7 +64,7 @@ CREATE TABLE IF NOT EXISTS scan_state (
 """
 
 async def init_db():
-    """Initialize the SQLite database schema if it doesn't await exist."""
+    """Create the database schema if it doesn't exist."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA journal_mode=WAL;")
         await db.executescript(INIT_SCRIPT)
@@ -75,10 +74,7 @@ async def init_db():
 # --- Batched Storage ---
 
 async def upsert_host_batch(db, hosts_data: List[Tuple[str, float]]):
-    """
-    Batch upsert for hosts based on IP.
-    Updates `last_seen` on conflict.
-    """
+    """Upsert hosts by IP, bumping last_seen on conflict."""
     try:
         await db.executemany(
             """
@@ -90,25 +86,27 @@ async def upsert_host_batch(db, hosts_data: List[Tuple[str, float]]):
     except Exception as e:
         logging.error(f"Batch Host Error: {e}")
 
+def _norm(value):
+    """Map the "unknown" sentinel to NULL so COALESCE keeps prior data on re-scan."""
+    if isinstance(value, str) and value.strip().lower() == "unknown":
+        return None
+    return value
+
+
 async def save_observation_batch(observations: List[dict]):
-    """
-    Saves a batch of dictionary-formatted Observations.
-    Handles upserts and history logic efficiently.
-    """
+    """Persist a batch of observations, upserting services and recording history."""
     if not observations:
         return
 
     async with aiosqlite.connect(DB_PATH) as db:
-        # 1. Batch Upsert Hosts
         hosts_data = [(obs['ip'], obs['timestamp']) for obs in observations]
         await upsert_host_batch(db, hosts_data)
-        
-        # 2. Process Services
-        # Fetch status of existing services to determine if this is a new state
+
+        # Load existing services so we can tell inserts from updates.
         ips = [f"'{obs['ip']}'" for obs in observations]
         ip_list_str = ",".join(ips)
-        
-        existing_map = {} # (ip, port, proto) -> (id, banner, state)
+
+        existing_map = {}  # (ip, port, protocol) -> (id, banner, state)
         async with db.execute(
             f"SELECT ip, port, protocol, id, banner, state FROM services WHERE ip IN ({ip_list_str})"
         ) as cursor:
@@ -122,8 +120,6 @@ async def save_observation_batch(observations: List[dict]):
         for obs in observations:
             key = (obs['ip'], obs['port'], obs['protocol'])
             ts = datetime.datetime.fromtimestamp(obs['timestamp']).isoformat()
-            
-            # Enrich with analysis if present
             analysis = obs.get('analysis', {})
             
             if key in existing_map:
@@ -132,26 +128,24 @@ async def save_observation_batch(observations: List[dict]):
                 new_state = obs['status']
                 
                 to_update.append((
-                    ts, new_banner, 
-                    analysis.get('service_type'), analysis.get('vendor'), analysis.get('product'),
-                    analysis.get('version'), analysis.get('confidence'), str(analysis.get('tags', [])),
+                    ts, new_banner,
+                    _norm(analysis.get('service_type')), _norm(analysis.get('vendor')), _norm(analysis.get('product')),
+                    _norm(analysis.get('version')), analysis.get('confidence') or None, str(analysis.get('tags', [])),
                     new_state,
                     svc_id
                 ))
                 
-                # History Check: Log separate event if state/banner changed
+                # Record a history entry when the banner or state changed.
                 if (new_banner and new_banner != old_banner) or (new_state != old_state):
                     history_inserts.append((svc_id, ts, new_banner, new_state))
             else:
-                # New Service Discovery
                 to_insert.append((
                     obs['ip'], obs['port'], obs['protocol'], obs['status'], obs.get('banner', ''),
                     analysis.get('service_type'), analysis.get('vendor'), analysis.get('product'),
                     analysis.get('version'), analysis.get('confidence', 0), str(analysis.get('tags', [])),
                     ts, ts
                 ))
-                
-        # Bulk Execute
+
         if to_insert:
             await db.executemany(
                 """
@@ -188,18 +182,6 @@ async def save_observation_batch(observations: List[dict]):
             
         await db.commit()
 
-async def get_stats():
-    """Retrieve high-level index statistics."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT COUNT(*) FROM hosts") as c:
-            hosts = (await c.fetchone())[0]
-        async with db.execute("SELECT COUNT(*) FROM services") as c:
-            services = (await c.fetchone())[0]
-        async with db.execute("SELECT COUNT(*) FROM scan_state WHERE status != 'COMPLETED'") as c:
-            pending = (await c.fetchone())[0]
-    return {"hosts": hosts, "services": services, "pending_chunks": pending}
-
-
 # --- Scheduler DB Ops ---
 
 async def create_scan_chunk(cidr, start_ip, end_ip, priority=1):
@@ -215,10 +197,7 @@ async def create_scan_chunk(cidr, start_ip, end_ip, priority=1):
         await db.commit()
 
 async def get_next_chunk():
-    """
-    Fetch priority queue-style next chunk.
-    Prioritizes Priority > Oldest Created.
-    """
+    """Return the next queued chunk, ordered by priority then creation time."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             """SELECT id, chunk_start, chunk_end, retry_count 
@@ -254,21 +233,18 @@ async def update_chunk_status(chunk_id, status, error=None):
 
 # --- Maintenance DB Ops ---
 
-async def get_stale_chunks(limit=10, high_priority=False, min_age_hours=24):
-    """Find COMPLETED chunks that need rescanning."""
+async def get_stale_chunks(limit=10, min_age_hours=24):
+    """Find completed chunks older than min_age_hours that should be rescanned."""
     now = datetime.datetime.now()
     cutoff = (now - datetime.timedelta(hours=min_age_hours)).isoformat()
-    
-    priority_filter = "priority >= 5" if high_priority else "priority < 5"
-    
+
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            f"""SELECT id, cidr, priority, created_at 
-               FROM scan_state 
-               WHERE status = 'COMPLETED' 
-               AND updated_at < ? 
-               AND {priority_filter} 
-               ORDER BY updated_at ASC 
+            """SELECT id, cidr, priority, created_at
+               FROM scan_state
+               WHERE status = 'COMPLETED'
+               AND updated_at < ?
+               ORDER BY updated_at ASC
                LIMIT ?""",
             (cutoff, limit)
         ) as cursor:

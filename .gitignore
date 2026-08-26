@@ -8,3 +8,7 @@ __pycache__/
 .env
 credentials.json
 token.json
+
+# Scan output
+exports/
+results.db*

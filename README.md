@@ -43,7 +43,7 @@ The tool is optimized for passive cooling systems (such as Apple M-series laptop
 
 | Service | Port | Detection Capabilities |
 |---------|------|------------------------|
-| HTTP/HTTPS | 80, 443, 8080, 8443 | Server type, TLS cipher, cert issuer, **self-signed detection** |
+| HTTP/HTTPS | 80, 443, 8080 | Server type, TLS cipher, cert issuer, **self-signed detection** |
 | FTP | 21 | Anonymous access detection |
 | SSH | 22 | Version, **key exchange, ciphers, MACs, host keys** |
 | Telnet | 23 | Banner grabbing for routers/IoT |
@@ -110,7 +110,7 @@ If you prefer to configure everything yourself:
 1. ensure python 3.8+ is installed.
 2. create a virtual environment: `python3 -m venv venv`
 3. activate it: `source venv/bin/activate`
-4. install packages: `pip install rich aiosqlite`
+4. install packages: `pip install rich aiosqlite cryptography`
 5. run: `python3 deep_focus.py`
 
 ---
@@ -130,11 +130,12 @@ deepfocus
 | `/scan` | Start scanning and open the live dashboard |
 | `/stop` | Stop scanning and export results |
 | `/settings` | Configure scan parameters |
+| `/help` | Show available commands |
 | `/exit` | Exit the application |
 
 ### Basic Workflow
 
-1. Launch the tool with `python deep_focus.py`
+1. Launch the tool with `deepfocus`
 2. Configure target network with `/settings` (Option 1)
 3. Adjust scan speed if needed with `/settings` (Option 3)
 4. Start scanning with `/scan`
@@ -183,44 +184,53 @@ Controls concurrent connection attempts.
 
 Directory where scan results will be saved.
 
+### Option 5: Ports
+
+Comma-separated list of ports to scan. Defaults to:
+
+```
+80,443,22,21,8080,5900,554,3389,23,1883,25,587,636
+```
+
 ---
 
 ## Understanding Export Logs
 
-Export files are saved as text files with the naming convention:
-```
-deep_focus_export_[timestamp].txt
-```
+Each export writes two files with the same timestamp:
+
+- `deep_focus_export_[timestamp].txt` — human-readable report
+- `deep_focus_export_[timestamp].json` — machine-readable array of results
 
 ### Log Entry Format
 
-Each discovered service is recorded with the following structure:
+Each discovered service is recorded in the text report as:
 
 ```
-IP: 192.168.1.100
-Port: 21
+Target:  192.168.1.100:21
 Service: ftp
-banner: 220 FTP Server Ready | Auth: [Anonymous Access ALLOWED]
---------------------
+Details: 220 FTP Server Ready | Auth: [Anonymous Access ALLOWED]
+------------------------------
 ```
 
 ### Field Descriptions
 
 | Field | Description |
 |-------|-------------|
-| IP | Target IP address |
-| Port | Service port number |
+| Target | IP address and port (`ip:port`) |
 | Service | Identified service type |
-| banner | Service response and authentication status |
+| Details | Service banner and authentication status |
 
 ### Authentication Status Indicators
 
 #### FTP (Port 21)
 | Status | Meaning |
 |--------|---------|
-| `Anonymous Access ALLOWED` | Server accepts anonymous login |
-| `Anonymous User Rejected` | Anonymous login disabled |
-| `Encryption Required (AUTH TLS)` | TLS required before authentication |
+| `Anonymous Access ALLOWED` | Anonymous login accepted |
+| `Anonymous Access ALLOWED (No Pass)` | Anonymous accepted without a password |
+| `Anonymous Access DENIED (530)` | Anonymous password rejected |
+| `Anonymous User Rejected` | Anonymous user not allowed |
+| `Anonymous User Rejected (550)` | Anonymous login not permitted |
+| `Encryption Required (AUTH TLS)` | TLS required before login |
 
 #### VNC (Port 5900)
 | Status | Meaning |

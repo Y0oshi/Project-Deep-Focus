@@ -1,21 +1,16 @@
 import re
-import json
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any
 
 class FingerprintRule:
-    """
-    Defines a weighted rule for identifying a service or product.
-    Contains a set of evidence patterns (regex) that map to a confidence score.
-    """
+    """A weighted set of regex evidence that identifies a service or product."""
     def __init__(self, name: str, type: str = "unknown", vendor: str = None, product: str = None, tags: List[str] = None):
         self.name = name
         self.type = type
         self.vendor = vendor
         self.product = product
         self.tags = tags or []
-        
-        # Evidence Weights (Max 100)
-        # Patterns: (location, regex, weight)
+
+        # Evidence patterns: (location, regex, weight), capped at 100 total.
         self.evidence: List[Tuple[str, str, int]] = []
         self.last_groups = None
 
@@ -25,14 +20,11 @@ class FingerprintRule:
         return self
 
     def evaluate(self, observation: Dict[str, Any]) -> Tuple[int, List[str]]:
-        """
-        Returns confidence score (0-100) and matched groups details.
-        observation: Observation dictionary (provides .banner, .headers, .body, .cert_info)
-        """
+        """Return (confidence 0-100, matched evidence details) for an observation."""
         total_score = 0
         details = []
-        
-        # Helper to check string against regex
+        self.last_groups = None  # avoid leaking a stale version between observations
+
         def check(text, regex):
             if not text: return False, None
             m = re.search(regex, text, re.IGNORECASE)
@@ -47,7 +39,6 @@ class FingerprintRule:
             elif location == "body":
                 match, groups = check(observation.get("body"), pattern)
             elif location.startswith("header:"):
-                # Check specific header
                 header_key = location.split(":")[1].lower()
                 headers = observation.get("headers", {})
                 val = headers.get(header_key)
@@ -58,7 +49,6 @@ class FingerprintRule:
             if match:
                 total_score += weight
                 details.append(f"Matched {location}")
-                # Store matched groups for version extraction
                 if groups:
                     self.last_groups = groups.groups()
 
@@ -69,9 +59,9 @@ RULES = []
 
 # Apache
 r_apache = FingerprintRule("Apache", type="http", vendor="Apache", product="HTTP Server")
-r_apache.add_evidence("banner", r"Apache", 40) # Weak signal
-r_apache.add_evidence("banner", r"Apache/([\d\.]+)", 60) # Stronger signal + version
-r_apache.add_evidence("header:server", r"Apache", 30) # Header reinforcement
+r_apache.add_evidence("banner", r"Apache", 40)
+r_apache.add_evidence("banner", r"Apache/([\d\.]+)", 60)
+r_apache.add_evidence("header:server", r"Apache", 30)
 RULES.append(r_apache)
 
 # Nginx
@@ -94,6 +84,28 @@ r_ssh = FingerprintRule("OpenSSH", type="ssh", vendor="OpenBSD", product="OpenSS
 r_ssh.add_evidence("banner", r"OpenSSH", 50)
 r_ssh.add_evidence("banner", r"OpenSSH_([\w\.]+)", 50)
 RULES.append(r_ssh)
+
+# Dropbear (embedded/IoT SSH)
+r_dropbear = FingerprintRule("Dropbear", type="ssh", vendor="Dropbear", product="SSH Server", tags=["iot", "embedded"])
+r_dropbear.add_evidence("banner", r"dropbear", 80)
+r_dropbear.add_evidence("banner", r"dropbear[_/]([\w\.]+)", 40)
+RULES.append(r_dropbear)
+
+# MikroTik RouterOS (SSH banner)
+r_mikrotik = FingerprintRule("MikroTik", type="ssh", vendor="MikroTik", product="RouterOS", tags=["network", "router"])
+r_mikrotik.add_evidence("banner", r"mikrotik", 80)
+r_mikrotik.add_evidence("banner", r"routeros", 80)
+RULES.append(r_mikrotik)
+
+# Cisco IOS (SSH banner)
+r_cisco = FingerprintRule("Cisco IOS", type="ssh", vendor="Cisco", product="IOS", tags=["network", "router"])
+r_cisco.add_evidence("banner", r"cisco", 80)
+RULES.append(r_cisco)
+
+# Generic SSH (any SSH protocol banner)
+r_gen_ssh = FingerprintRule("Generic SSH", type="ssh", vendor="unknown", product="SSH Server")
+r_gen_ssh.add_evidence("banner", r"^SSH-\d\.\d", 50)
+RULES.append(r_gen_ssh)
 
 # Generic Rules (Fallbacks)
 r_gen_http = FingerprintRule("Generic HTTP", type="http", vendor="unknown", product="HTTP Server")
@@ -138,10 +150,7 @@ RULES.append(r_ha)
 
 
 def analyze(observation_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Analyzes an Observation dictionary using weighted rules to identify the technology stack.
-    Returns an analysis dictionary containing service_type, vendor, product, version, and confidence score.
-    """
+    """Score an observation against all rules and return the best match."""
     best_rule = None
     best_score = 0
     best_details = []
@@ -159,7 +168,7 @@ def analyze(observation_dict: Dict[str, Any]) -> Dict[str, Any]:
         "product": "unknown",
         "version": None,
         "tags": [],
-        "confidence": 0, # Explainability
+        "confidence": 0,
         "evidence": []
     }
     
@@ -170,9 +179,8 @@ def analyze(observation_dict: Dict[str, Any]) -> Dict[str, Any]:
         result["tags"] = best_rule.tags
         result["confidence"] = best_score
         result["evidence"] = best_details
-        
-        # Version extraction (heuristic)
+
         if hasattr(best_rule, 'last_groups') and best_rule.last_groups:
-             result["version"] = best_rule.last_groups[0]
+            result["version"] = best_rule.last_groups[0]
              
     return result

@@ -32,7 +32,7 @@ echo "[*] Installing dependencies..."
 source venv/bin/activate
 
 # Direct installation (Modern approach, no requirements.txt needed)
-pip install rich aiosqlite --upgrade
+pip install rich aiosqlite cryptography --upgrade
 
 # 4. Create Launcher
 echo "[*] Creating launcher..."

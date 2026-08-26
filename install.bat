@@ -30,7 +30,7 @@ IF EXIST "venv" (
 :: 3. Install Dependencies
 ECHO [*] Installing dependencies...
 call venv\Scripts\activate.bat
-pip install rich aiosqlite --upgrade
+pip install rich aiosqlite cryptography --upgrade
 
 :: 4. Create Launcher
 ECHO [*] Creating launcher...

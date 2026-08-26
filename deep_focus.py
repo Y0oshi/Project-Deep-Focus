@@ -4,12 +4,15 @@ import time
 import os
 from pathlib import Path
 
-# Local Code modules
 from execution import config
-from execution import visualizer 
+from execution import visualizer
+from execution import db_manager
 
-# --- Configuration & Setup ---
-sys.path.append(".")  # Ensure module path is correct
+sys.path.append(".")
+
+# Resolve paths relative to this file so the tool works from any working dir.
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = db_manager.DB_PATH
 
 # --- ASCII Art & Branding ---
 BANNER = r"""
@@ -46,10 +49,8 @@ BANNER = r"""
                      Made By Y0oshi | ig:@rde0
 """
 
-# Global handle for scanner subprocess
 scanner_process = None
 
-# Rich console for colored output
 from rich.console import Console
 console = Console()
 
@@ -65,83 +66,80 @@ def start_scan():
     """Start the background scanning process and launch the UI."""
     global scanner_process
     cfg = config.load_config()
-    
-    # Check if already running
+
     if scanner_process and scanner_process.poll() is None:
         console.print("[yellow][*] Scanner is already active.[/yellow]")
         return
         
     console.print("[green][*] Launching Scanner Engine...[/green]")
     
-    # Construct scanner command
+    # Construct scanner command (absolute paths, cwd pinned to repo root)
+    default_ports = "80,443,22,21,8080,5900,554,3389,23,1883,25,587,636"
     cmd = [
-        sys.executable, "execution/scanner.py",
+        sys.executable, str(BASE_DIR / "execution" / "scanner.py"),
         "--target", cfg['target_network'],
         "--rate", str(cfg['scan_speed']),
         "--max-load", str(cfg['max_load']),
         "--cool-down", str(cfg['cool_down_target']),
+        "--ports", cfg.get('ports') or default_ports,
         "--loop"
     ]
-    
+
     # Execute in background, discarding output to avoid UI conflicts
-    # Output is piped to /dev/null
     try:
-        devnull = open(os.devnull, 'w')
-        scanner_process = subprocess.Popen(cmd, stdout=devnull, stderr=devnull)
+        scanner_process = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=str(BASE_DIR)
+        )
         console.print(f"[green][+] Scanner started successfully (PID: {scanner_process.pid})[/green]")
-        time.sleep(1) # Allow process to initialize
+        time.sleep(1)
     except Exception as e:
         console.print(f"[bold red][!] Failed to start scanner: {e}[/bold red]")
         return
 
-    # Attach Visualizer (This blocks the main thread until user exits UI)
+    # The dashboard blocks until the user exits it.
     console.print("[*] Attaching Dashboard... (Active)")
     time.sleep(1)
-    
+
     try:
         visualizer.run_dashboard()
     except KeyboardInterrupt:
-        pass # Handle Ctrl+C gracefully
+        pass
     except Exception as e:
         console.print(f"[bold red][!] Visualizer error: {e}[/bold red]")
-        
-    # When visualizer exits:
+
     console.print("\n[blue][i] Dashboard closed. Scanner is still running in background.[/blue]")
     console.print("    Type '[bold red]/stop[/bold red]' to halt, or '[green]/scan[/green]' to view again.")
 
 def stop_scan():
     """Terminate the scanner process and offer export."""
     global scanner_process
-    
-    # 1. Terminate Process
+
     if scanner_process and scanner_process.poll() is None:
         console.print(f"[yellow][*] Stopping Scanner (PID: {scanner_process.pid})...[/yellow]")
         scanner_process.terminate()
         try:
             scanner_process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            scanner_process.kill() # Force kill if stuck
+            scanner_process.kill()
         console.print("[green][+] Scanner Stopped.[/green]")
         scanner_process = None
     else:
         console.print("[dim][i] Scanner is not running.[/dim]")
-        
-    # 2. Offer Export
+
     perform_export()
-    
+
     import gc
-    
-    # 3. Cleanup Session Data
+
     console.print("\n[dim][*] Cleaning up session data...[/dim]")
-    
-    # Force GC to release any lingering SQLite handles
+
+    # Release lingering SQLite handles before deleting the file.
     gc.collect()
-    
+
     for attempt in range(5):
         try:
-            # Remove temporary SQLite database files
-            for f in ["results.db", "results.db-wal", "results.db-shm"]:
-                if os.path.exists(f): 
+            db_path = str(DB_PATH)
+            for f in [db_path, db_path + "-wal", db_path + "-shm"]:
+                if os.path.exists(f):
                     os.remove(f)
             console.print("[green][+] Session cleared. Ready for next scan.[/green]")
             break
@@ -149,15 +147,16 @@ def stop_scan():
             # Windows file locking... wait and retry
             time.sleep(1.0)
             if attempt == 4:
-                console.print(f"[red][!] Cleanup warning: Could not delete results.db (File locked). Manual delete required.[/red]")
+                console.print("[red][!] Cleanup warning: Could not delete results.db (File locked). Manual delete required.[/red]")
         except Exception as e:
              console.print(f"[red][!] Cleanup warning: {e}[/red]")
              break
 
 def perform_export():
     """Export valid findings to a text file."""
-    # Lazy import sqlite3 only when needed
+    # Lazy import sqlite3/json only when needed
     import sqlite3
+    import json
     
     cfg = config.load_config()
     
@@ -179,7 +178,7 @@ def perform_export():
     
     conn = None
     try:
-        conn = sqlite3.connect("results.db")
+        conn = sqlite3.connect(str(DB_PATH), timeout=5.0)
         cursor = conn.cursor()
         
         # Select high-value targets (Open ports + Valid services)
@@ -194,24 +193,34 @@ def perform_export():
             )
         """
         cursor.execute(query)
-        
+        rows = cursor.fetchall()
+
         count = 0
+        json_rows = []
         with open(filename, "w", encoding="utf-8") as f:
             f.write(f"Deep Focus Scan Report - {time.ctime()}\n")
             f.write("="*60 + "\n\n")
-            
-            for row in cursor:
-                ip, port, svc, banner = row
+
+            for ip, port, svc, banner in rows:
                 f.write(f"Target:  {ip}:{port}\n")
                 f.write(f"Service: {svc}\n")
                 if banner:
-                    # Clean up banner for readable log output
                     clean_banner = banner.replace('\n', ' ').replace('\r', '')[:120]
                     f.write(f"Details: {clean_banner}\n")
                 f.write("-" * 30 + "\n")
                 count += 1
-                
-        console.print(f"[bold green][+] Export Complete. Saved {count} records.[/bold green]")
+                json_rows.append({
+                    "ip": ip,
+                    "port": port,
+                    "service": svc,
+                    "banner": (banner or "").replace('\n', ' ').replace('\r', '')[:120]
+                })
+
+        json_filename = export_dir / f"deep_focus_export_{timestamp}.json"
+        with open(json_filename, "w", encoding="utf-8") as f:
+            json.dump(json_rows, f, indent=2)
+
+        console.print(f"[bold green][+] Export Complete. Saved {count} records (TXT + JSON).[/bold green]")
         
     except Exception as e:
         console.print(f"[bold red][!] Export Failed: {e}[/bold red]")
@@ -224,14 +233,16 @@ def configure_settings():
     cfg = config.load_config()
     power = cfg.get('power_level', 50)
     speed = cfg.get('scan_speed', 500)
-    
+    ports = cfg.get('ports', "80,443,22,21,8080,5900,554,3389,23,1883,25,587,636")
+
     print("\n--- Configuration ---")
     print(f"1. Target Network   [Current: {cfg['target_network']}]")
     print(f"2. Power Level      [Current: {power}%] (Controls Thermal Limit)")
     print(f"3. Scan Speed       [Current: {speed} threads]")
     print(f"4. Export Path      [Current: {cfg['export_path']}]")
-    print("5. Back")
-    
+    print(f"5. Ports            [Current: {ports}]")
+    print("6. Back")
+
     choice = input("Select setting to change: ")
     
     if choice == '1':
@@ -276,22 +287,29 @@ def configure_settings():
     elif choice == '4':
         val = input("Enter Export Path: ").strip()
         if val: cfg['export_path'] = val
-    
+
+    elif choice == '5':
+        val = input("Enter Ports (comma-separated): ").strip()
+        if val:
+            parts = [p.strip() for p in val.split(",") if p.strip()]
+            if parts and all(p.isdigit() for p in parts):
+                cfg['ports'] = ",".join(parts)
+            else:
+                print("Invalid ports. Use digits separated by commas.")
+
     config.save_config(cfg)
     print("[+] Settings Saved.")
 
 def main():
-    """Main Application Loop."""
-    # Resize terminal for optimal viewing (100 cols x 40 rows)
+    """Run the interactive command loop."""
+    # Resize the terminal for a nicer layout.
     sys.stdout.write("\033[8;40;100t")
-    os.system('clear')  # Clean start
-    
-    # Print branded banner
+    os.system('clear')
+
     for line in BANNER.strip().split('\n'):
         console.print(line, style="bold red", justify="center")
     print_help()
-    
-    # Command Loop
+
     while True:
         try:
             cmd = input("\nDeep Focus> ").strip().lower()
