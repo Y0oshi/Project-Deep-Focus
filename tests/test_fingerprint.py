@@ -73,6 +73,15 @@ class TestFingerprintRules(unittest.TestCase):
         r = fp.analyze(_obs(banner="nginx"))
         self.assertIsNone(r["version"])
 
+    def test_version_not_wiped_by_non_capturing_match(self):
+        # The Apache rule captures the version from the banner, but a later
+        # non-capturing evidence pattern (header:server -> "Apache") must not
+        # overwrite last_groups with () and wipe the version.
+        r = fp.analyze(_obs(banner="Apache/2.4.52 (Ubuntu)",
+                            headers={"server": "Apache"}))
+        self.assertEqual(r["vendor"], "Apache")
+        self.assertEqual(r["version"], "2.4.52")
+
 
 if __name__ == "__main__":
     unittest.main()

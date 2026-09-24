@@ -49,7 +49,10 @@ class FingerprintRule:
             if match:
                 total_score += weight
                 details.append(f"Matched {location}")
-                if groups:
+                # A re.Match is truthy even with zero capture groups; only
+                # overwrite when groups were actually captured, otherwise a
+                # later non-capturing match would wipe a captured version.
+                if groups and groups.groups():
                     self.last_groups = groups.groups()
 
         return min(total_score, 100), details
